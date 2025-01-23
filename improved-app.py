@@ -6,34 +6,14 @@ import matplotlib.pyplot as plt
 
 # Configuration
 FOR_PROFIT_PUBLISHERS = {
-    'elsevier',
-    'springer',
-    'springer nature',
-    'wiley',
-    'taylor & francis',
-    'sage publications',
-    'frontiers media sa',
-    'ieee',
-    'emerald',
-    'karger',
-    'thieme',
-    'wolters kluwer',
-    'acs publications',
-    'lippincott',
-    'lippincott williams & wilkins',
-    'wolters kluwer health',
-    'nature publishing group',
-    'nature portfolio',
-    'biomed central',
-    'biomedcentral',
-    'bmc',
-    'hindawi',
-    'mdpi',
-    'informa',
-    'f1000',
-    'plos',
-    'relx',
-    'relx group'
+    'elsevier', 'springer', 'springer nature', 'wiley', 'taylor & francis',
+    'sage publications', 'frontiers media sa', 'ieee', 'emerald', 'karger',
+    'thieme', 'wolters kluwer', 'acs publications', 'lippincott',
+    'lippincott williams & wilkins', 'wolters kluwer health',
+    'nature publishing group', 'nature portfolio', 'biomed central',
+    'biomedcentral', 'bmc', 'hindawi', 'mdpi', 'informa', 'f1000', 'relx',
+    'relx group', 'bentham science', 'inderscience', 'igi global', 'sciencedirect',
+    'de gruyter', 'sciendo', 'omics international', 'rsc publishing',
 }
 
 PREPRINT_SERVERS = {
@@ -83,11 +63,11 @@ def fetch_author_details(author_id):
 
 def fetch_publications(author_id):
     """Fetch publications data from OpenAlex API."""
-    with st.spinner('Fetching publication data (limited to last 100 papers)...'):
+    with st.spinner('Fetching publication data (limited to last 100 articles)...'):
         try:
             base_url = "https://api.openalex.org/works"
             params = {
-                'filter': f"author.id:{author_id}",
+                'filter': f"author.id:{author_id},type:article",
                 'per-page': 100,
                 'sort': 'publication_date:desc',
                 'mailto': 'david.bann@ucl.ac.uk'
@@ -110,40 +90,84 @@ def get_publisher_info(work):
         return 'unknown'
         
     try:
+        # Debug: Print the relevant fields to see what we're getting
+        print("\nDEBUG Publisher Info:")
+        print("Direct publisher:", work.get('publisher'))
+        print("Host org:", work.get('primary_location', {}).get('source', {}).get('host_organization_name'))
+        print("Display name:", work.get('primary_location', {}).get('source', {}).get('display_name'))
+        print("Source:", work.get('primary_location', {}).get('source', {}))
+        
         publisher = None
         
-        # Try to get the publisher information from various fields
+        # Try multiple paths to get publisher info
         if isinstance(work, dict):
+            # Try direct publisher field
             if work.get('publisher'):
                 publisher = str(work['publisher']).lower()
+            # Try host organization name
             elif work.get('primary_location', {}).get('source', {}).get('host_organization_name'):
                 publisher = str(work['primary_location']['source']['host_organization_name']).lower()
+            # Try display name from source
             elif work.get('primary_location', {}).get('source', {}).get('display_name'):
                 publisher = str(work['primary_location']['source']['display_name']).lower()
+            # Try other locations if primary fails
+            elif work.get('locations'):
+                for location in work['locations']:
+                    if location.get('source', {}).get('host_organization_name'):
+                        publisher = str(location['source']['host_organization_name']).lower()
+                        break
+                    elif location.get('source', {}).get('display_name'):
+                        publisher = str(location['source']['display_name']).lower()
+                        break
         
         if not publisher:
+            print("No publisher found in any field")
             return 'unknown'
+            
+        print(f"Found raw publisher: {publisher}")
             
         # Clean up common variations
         publisher = publisher.replace('ltd', '').replace('limited', '').strip()
-        if any(p in publisher for p in ['elsevier', 'sciencedirect', 'relx group']):
+        
+        # Extended publisher mapping
+        if any(p in publisher for p in ['elsevier', 'sciencedirect', 'cell press', 'relx group']):
             return 'elsevier'
         elif any(p in publisher for p in ['springer', 'nature portfolio', 'nature publishing']):
             return 'springer nature'
         elif any(p in publisher for p in ['wiley', 'blackwell']):
             return 'wiley'
-        elif 'taylor & francis' in publisher or 'taylor and francis' in publisher:
+        elif any(p in publisher for p in ['taylor & francis', 'taylor and francis', 'routledge']):
             return 'taylor & francis'
         elif any(p in publisher for p in ['wolters', 'lippincott']):
             return 'wolters kluwer'
         elif any(p in publisher for p in ['biomed central', 'bmc', 'biomedcentral']):
             return 'biomed central'
+        elif 'sage' in publisher:
+            return 'sage publications'
+        elif 'frontiers' in publisher:
+            return 'frontiers media sa'
+        elif 'ieee' in publisher:
+            return 'ieee'
+        elif 'karger' in publisher:
+            return 'karger'
+        elif 'thieme' in publisher:
+            return 'thieme'
+        elif 'hindawi' in publisher:
+            return 'hindawi'
+        elif 'mdpi' in publisher:
+            return 'mdpi'
+        elif 'plos' in publisher or 'public library of science' in publisher:
+            return 'plos'
+        elif 'oxford university press' in publisher:
+            return 'oxford university press'
+        elif 'cambridge university press' in publisher:
+            return 'cambridge university press'
         
         return publisher
         
-    except:
+    except Exception as e:
+        print(f"Error in get_publisher_info: {str(e)}")
         return 'unknown'
-
 def analyze_publishers(works):
     """Analyze publisher data from works."""
     publishers = []
@@ -153,32 +177,32 @@ def analyze_publishers(works):
     
     with st.spinner('Analyzing publications...'):
         try:
-            filtered_works = [w for w in works if w is not None and get_publisher_info(w) not in PREPRINT_SERVERS]
+            # Get publisher info for each work and filter out None, unknown publishers, and preprints
+            publications = []
+            for work in works:
+                publisher = get_publisher_info(work)
+                if publisher is not None and publisher != 'unknown' and publisher not in PREPRINT_SERVERS:
+                    publications.append((work, publisher))
             
-            for work in filtered_works:
-                try:
-                    publisher = get_publisher_info(work)
-                    publishers.append(publisher)
+            for work, publisher in publications:
+                # Check for OpenAlex's estimated APC first
+                apc_cost = None
+                if work.get('apc_paid') and isinstance(work['apc_paid'], dict):
+                    apc_cost = work['apc_paid'].get('value')
+                
+                # If no OpenAlex APC, use our estimates
+                if not apc_cost:
+                    apc_cost = ESTIMATED_APC.get(publisher, ESTIMATED_APC['default'])
+                
+                publishers.append(publisher)
+                costs.append(apc_cost)
+                total_cost += apc_cost
+                
+                if publisher in FOR_PROFIT_PUBLISHERS:
+                    for_profit_count += 1
                     
-                    # Check for OpenAlex's estimated APC first
-                    apc_cost = None
-                    if work.get('apc_paid') and isinstance(work['apc_paid'], dict):
-                        apc_cost = work['apc_paid'].get('value')
-                    
-                    # If no OpenAlex APC, use our estimates
-                    if not apc_cost:
-                        apc_cost = ESTIMATED_APC.get(publisher, ESTIMATED_APC['default'])
-                    
-                    costs.append(apc_cost)
-                    total_cost += apc_cost
-                    
-                    if publisher in FOR_PROFIT_PUBLISHERS:
-                        for_profit_count += 1
-                except:
-                    continue
-                    
-        except:
-            pass
+        except Exception as e:
+            print(f"Error in analyze_publishers: {str(e)}")
     
     return publishers, costs, total_cost, for_profit_count
 
@@ -217,7 +241,6 @@ def create_visualization(publishers_count):
     ax.tick_params(axis='both', which='major', labelsize=8)
     
     return fig
-
 def main():
     st.set_page_config(page_title="Publication Cost Tracker", layout="wide")
     
@@ -229,7 +252,7 @@ def main():
         st.markdown("""
         Find your OpenAlex Author ID at [OpenAlex.org](https://openalex.org/)
         """)
-        author_id = st.text_input("OpenAlex Author ID", placeholder="e.g., A5008020290")
+        author_id = st.text_input("OpenAlex Author ID", value="A5070446713", placeholder="e.g., A5008020290")
         
         analyze_button = st.button("Analyze Publications")
     
@@ -238,11 +261,14 @@ def main():
             clean_id = clean_author_id(author_id)
             
             data = fetch_publications(clean_id)
+            # Filter out preprints and unknown publishers
             filtered_results = [r for r in data.get('results', []) 
-                              if r is not None and get_publisher_info(r) not in PREPRINT_SERVERS]
+                              if r is not None and 
+                              get_publisher_info(r) not in PREPRINT_SERVERS and 
+                              get_publisher_info(r) != 'unknown']
             
             if not filtered_results:
-                st.info("No publications found. Please check your Author ID and try again.")
+                st.info("No publications with known publishers found. Please check your Author ID and try again.")
                 return
                 
             # Get author details from OpenAlex
@@ -252,11 +278,8 @@ def main():
             
             if author_details:
                 author_name = author_details.get('display_name', "Unknown Author")
-                
-                # Get the last known institutions (plural)
                 last_known_institutions = author_details.get('last_known_institutions', [])
                 if last_known_institutions and isinstance(last_known_institutions, list) and len(last_known_institutions) > 0:
-                    # Take the first institution as the primary affiliation
                     primary_inst = last_known_institutions[0]
                     if isinstance(primary_inst, dict) and 'display_name' in primary_inst:
                         affiliation = primary_inst['display_name']
@@ -269,11 +292,10 @@ def main():
             publishers_count = Counter(publishers)
             
             for_profit_percentage = (for_profit_count / total_works * 100) if total_works > 0 else 0
-            estimated_profit = total_cost * 0.3
             
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Analysis of recent publications", 
+                st.metric("Analysis of publications with known publishers", 
                          f"{total_works} of {len(data['results'])} total")
             with col2:
                 st.metric("For-Profit Publishers", 
@@ -282,31 +304,33 @@ def main():
                 st.metric("Total Estimated Publisher Costs", 
                          f"${total_cost:,.2f}")
             
-            fig = create_visualization(publishers_count)
-            st.pyplot(fig)
+            if publishers:  # Only create visualization if there are publishers to show
+                fig = create_visualization(publishers_count)
+                st.pyplot(fig)
             
             st.subheader("Publication Details")
-            publisher_df = pd.DataFrame({
-                'Publisher': [p.title() for p in publishers],
-                'Est. APC': [f"${c:,}" for c in costs]
-            })
-            st.dataframe(publisher_df)
-            
-            csv = publisher_df.to_csv(index=False)
-            st.download_button(
-                "Download Results CSV",
-                csv,
-                "publisher_analysis.csv",
-                "text/csv",
-                key='download-csv'
-            )
+            if publishers:  # Only create dataframe if there are publishers to show
+                publisher_df = pd.DataFrame({
+                    'Publisher': [p.title() for p in publishers],
+                    'Est. APC': [f"${c:,}" for c in costs]
+                })
+                st.dataframe(publisher_df)
+                
+                csv = publisher_df.to_csv(index=False)
+                st.download_button(
+                    "Download Results CSV",
+                    csv,
+                    "publisher_analysis.csv",
+                    "text/csv",
+                    key='download-csv'
+                )
             
             st.markdown("""
             ---
-            Past 100 publications analysed using OpenAlex database ([https://openalex.org/](https://openalex.org/)). Preprints are excluded.  
+            Past 100 research articles with known publishers analysed using OpenAlex database ([https://openalex.org/](https://openalex.org/)). Articles with unknown publishers, other publication types, and preprints are excluded.  
             Costs obtained from OpenAlex - where not available estimated to be $1,500.  
             This is a proof of concept prototype. Feedback (david.bann@ucl.ac.uk) is appreciated.
             """)
-
+            
 if __name__ == "__main__":
     main()
