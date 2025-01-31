@@ -29,6 +29,7 @@ you can also use `wget` instead of `curl` if necessary:
 ```bash
 wget -qO- https://astral.sh/uv/install.sh | sh
 ```
+## Step 3: Run the app
 
 ### Running the app with uv
 0. Open the terminal of your choice (the one you installed `uv` for)
