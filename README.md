@@ -8,5 +8,5 @@ A simple tool that estimates the cost of publishing - including the % of for pro
 
 ![Screenshot of the Publication Cost Tracker](screenshot.png)
 
-**Contact/give feedback**:
+# Contact/give feedback
 This is a proof of concept prototype. Feedback (david.bann@ucl.ac.uk) is welcome.
