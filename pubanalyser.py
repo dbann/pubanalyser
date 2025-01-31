@@ -1,3 +1,6 @@
+
+
+
 import streamlit as st
 import requests
 import pandas as pd
@@ -49,11 +52,11 @@ def search_by_orcid(orcid):
             'filter': f"orcid:{orcid}",
             'mailto': 'david.bann@ucl.ac.uk'
         }
-        
+
         response = requests.get(base_url, params=params)
         response.raise_for_status()
         data = response.json()
-        
+
         if data.get('results') and len(data['results']) > 0:
             author = data['results'][0]
             return {
@@ -77,11 +80,11 @@ def search_authors(query):
             'per-page': 10,  # Limit to top 10 results
             'mailto': 'david.bann@ucl.ac.uk'
         }
-        
+
         response = requests.get(base_url, params=params)
         response.raise_for_status()
         data = response.json()
-        
+
         authors = []
         if 'results' in data:
             for author in data['results']:
@@ -91,14 +94,14 @@ def search_authors(query):
                     'affiliation': 'Unknown affiliation',
                     'works_count': author.get('works_count', 0)
                 }
-                
+
                 # Get latest affiliation
                 if author.get('last_known_institutions'):
                     if len(author['last_known_institutions']) > 0:
                         author_info['affiliation'] = author['last_known_institutions'][0].get('display_name', 'Unknown affiliation')
-                
+
                 authors.append(author_info)
-        
+
         return authors
     except Exception as e:
         print(f"Error in search_authors: {str(e)}")
@@ -117,7 +120,7 @@ def fetch_author_details(author_id):
     try:
         url = f"https://api.openalex.org/authors/{author_id}"
         params = {'mailto': 'david.bann@ucl.ac.uk'}
-        
+
         response = requests.get(url, params=params)
         response.raise_for_status()
         return response.json()
@@ -135,15 +138,15 @@ def fetch_publications(author_id):
                 'sort': 'publication_date:desc',
                 'mailto': 'david.bann@ucl.ac.uk'
             }
-            
+
             response = requests.get(base_url, params=params)
             response.raise_for_status()
             data = response.json()
-            
+
             if 'results' in data and isinstance(data['results'], list):
                 return data
             return {'results': []}
-            
+
         except:
             return {'results': []}
 
@@ -151,7 +154,7 @@ def get_publisher_info(work):
     """Safely extract publisher information from a work."""
     if work is None:
         return 'unknown'
-        
+
     try:
         # Debug: Print the relevant fields to see what we're getting
         print("\nDEBUG Publisher Info:")
@@ -159,9 +162,9 @@ def get_publisher_info(work):
         print("Host org:", work.get('primary_location', {}).get('source', {}).get('host_organization_name'))
         print("Display name:", work.get('primary_location', {}).get('source', {}).get('display_name'))
         print("Source:", work.get('primary_location', {}).get('source', {}))
-        
+
         publisher = None
-        
+
         # Try multiple paths to get publisher info
         if isinstance(work, dict):
             # Try direct publisher field
@@ -182,16 +185,16 @@ def get_publisher_info(work):
                     elif location.get('source', {}).get('display_name'):
                         publisher = str(location['source']['display_name']).lower()
                         break
-        
+
         if not publisher:
             print("No publisher found in any field")
             return 'unknown'
-            
+
         print(f"Found raw publisher: {publisher}")
-            
+
         # Clean up common variations
         publisher = publisher.replace('ltd', '').replace('limited', '').strip()
-        
+
         # Extended publisher mapping
         if any(p in publisher for p in ['elsevier', 'sciencedirect', 'cell press', 'relx group']):
             return 'elsevier'
@@ -225,9 +228,9 @@ def get_publisher_info(work):
             return 'oxford university press'
         elif 'cambridge university press' in publisher:
             return 'cambridge university press'
-        
+
         return publisher
-        
+
     except Exception as e:
         print(f"Error in get_publisher_info: {str(e)}")
         return 'unknown'
@@ -239,7 +242,7 @@ def analyze_publishers(works):
     titles = []  # Add this line
     total_cost = 0
     for_profit_count = 0
-    
+
     with st.spinner('Analyzing publications...'):
         try:
             # Get publisher info for each work and filter out None, unknown publishers, and preprints
@@ -248,61 +251,61 @@ def analyze_publishers(works):
                 publisher = get_publisher_info(work)
                 if publisher is not None and publisher != 'unknown' and publisher not in PREPRINT_SERVERS:
                     publications.append((work, publisher))
-            
+
             for work, publisher in publications:
                 # Check for OpenAlex's estimated APC first
                 apc_cost = None
                 if work.get('apc_paid') and isinstance(work['apc_paid'], dict):
                     apc_cost = work['apc_paid'].get('value')
-                
+
                 # If no OpenAlex APC, use our estimates
                 if not apc_cost:
                     apc_cost = ESTIMATED_APC.get(publisher, ESTIMATED_APC['default'])
-                
+
                 publishers.append(publisher)
                 costs.append(apc_cost)
                 titles.append(work.get('title', 'Unknown Title'))  # Add this line
                 total_cost += apc_cost
-                
+
                 if publisher in FOR_PROFIT_PUBLISHERS:
                     for_profit_count += 1
-                    
+
         except Exception as e:
             print(f"Error in analyze_publishers: {str(e)}")
-    
+
     return publishers, costs, total_cost, for_profit_count, titles  # Add titles to return
 
 def create_visualization(publishers_count, return_fig=True):
     """Create a bar chart of publisher distribution with for-profit publishers highlighted."""
     fig, ax = plt.subplots(figsize=(10, 3))  # Further reduced height
-    
+
     top_publishers = dict(sorted(publishers_count.items(), key=lambda x: x[1], reverse=True)[:10])
-    
-    colors = ['#ff6b6b' if p.lower() in FOR_PROFIT_PUBLISHERS else '#4a90e2' 
+
+    colors = ['#ff6b6b' if p.lower() in FOR_PROFIT_PUBLISHERS else '#4a90e2'
               for p in top_publishers.keys()]
-    
+
     bars = plt.bar(range(len(top_publishers)), list(top_publishers.values()), color=colors)
-    
-    plt.xticks(range(len(top_publishers)), 
-              list(top_publishers.keys()), 
+
+    plt.xticks(range(len(top_publishers)),
+              list(top_publishers.keys()),
               rotation=45,
               ha='right',
               fontsize=9)
-    
+
     plt.subplots_adjust(bottom=0.18, left=0.08, right=0.98, top=0.98)
     plt.ylabel('Number of Publications', fontsize=9, labelpad=8)
     plt.xlabel('Publisher', fontsize=9, labelpad=8)
     plt.ylim(bottom=0)
     plt.grid(axis='y', linestyle='--', alpha=0.3)
     ax.tick_params(axis='both', which='major', labelsize=8)
-    
+
     if return_fig:
         return fig
     else:
         plt.savefig('publisher_distribution.png', dpi=300, bbox_inches='tight')
         plt.close()
         return 'publisher_distribution.png'
-    
+
 def display_analysis_results(author_id):
     """Display the analysis results for a given author ID."""
     # Fetch author details first
@@ -310,12 +313,12 @@ def display_analysis_results(author_id):
     if not author_details:
         st.error("Could not fetch author details.")
         return
-        
+
     # Display author information in a more compact way with consistent styling
     st.markdown("""
         <h3 style='margin-bottom: 0.5rem;'>Author Information</h3>
         """, unsafe_allow_html=True)
-    
+
     # Author info in columns with aligned text
     col1, col2 = st.columns(2)
     with col1:
@@ -330,25 +333,25 @@ def display_analysis_results(author_id):
             f"<div style='font-size: 1.1rem;'><strong>Current Affiliation:</strong> {current_affiliation}</div>",
             unsafe_allow_html=True
         )
-    
+
     st.markdown("<hr style='margin: 0.5rem 0;'>", unsafe_allow_html=True)
-    
+
     # Fetch publications
     publications_data = fetch_publications(author_id)
-    
+
     if not publications_data.get('results'):
         st.error("No publications found for this author.")
         return
-    
+
     # Analyze publishers
     publishers, costs, total_cost, for_profit_count, titles = analyze_publishers(publications_data['results'])
     total_pubs = len(publishers)
     for_profit_percentage = (for_profit_count / total_pubs * 100) if total_pubs > 0 else 0
     publishers_count = Counter(publishers)
-    
+
     # Display results header
     st.markdown("<h3 style='margin-top: 1rem; margin-bottom: 0.5rem;'>Publication Analysis Results</h3>", unsafe_allow_html=True)
-    
+
     # Summary statistics
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -357,26 +360,26 @@ def display_analysis_results(author_id):
         st.metric("For-Profit Publications", f"{for_profit_count} ({for_profit_percentage:.1f}%)")
     with col3:
         st.metric("Estimated Total Cost", f"${total_cost:,.2f}")
-    
+
     # Display visualization and export options
     if publishers_count:
         st.markdown("<h4 style='margin-top: 1rem; margin-bottom: 0.5rem;'>Publisher Distribution</h4>", unsafe_allow_html=True)
-        
+
         # Display the plot
         fig = create_visualization(publishers_count)
         st.pyplot(fig, use_container_width=True)
         plt.close()
-        
+
         # Create export buttons in columns
         st.markdown("<h4 style='margin-top: 1rem; margin-bottom: 0.5rem;'>Export Options</h4>", unsafe_allow_html=True)
         col1, col2 = st.columns(2)
-        
+
         with col1:
             # Export visualization as PNG
             if st.button("Export Graph as PNG"):
                 # Create and save the visualization
                 png_path = create_visualization(publishers_count, return_fig=False)
-                
+
                 # Read the saved file and create a download button
                 with open(png_path, "rb") as file:
                     btn = st.download_button(
@@ -385,7 +388,7 @@ def display_analysis_results(author_id):
                         file_name="publisher_distribution.png",
                         mime="image/png"
                     )
-        
+
         with col2:
             # Export detailed data as CSV
             csv_data = pd.DataFrame({
@@ -399,7 +402,7 @@ def display_analysis_results(author_id):
                     f"${total_cost:,.2f}"
                 ]
             })
-            
+
             # Add detailed publisher breakdown
             detailed_df = pd.DataFrame({
                 'Title': titles,
@@ -407,18 +410,18 @@ def display_analysis_results(author_id):
                 'Estimated Cost': costs,
                 'For Profit': [p.lower() in FOR_PROFIT_PUBLISHERS for p in publishers]
             })
-            
+
             # Convert to CSV
-            csv = pd.concat([csv_data, pd.DataFrame({'Metric': [''], 'Value': ['']}), 
+            csv = pd.concat([csv_data, pd.DataFrame({'Metric': [''], 'Value': ['']}),
                            detailed_df.reset_index(drop=True)]).to_csv(index=False)
-            
+
             st.download_button(
                 label="Export Full Results as CSV",
                 data=csv,
                 file_name="publication_analysis.csv",
                 mime="text/csv"
             )
-    
+
     # Display detailed breakdown (only once, at the end)
     st.markdown("<h4 style='margin-top: 1rem; margin-bottom: 0.5rem;'>Detailed Cost Breakdown</h4>", unsafe_allow_html=True)
     breakdown_df = pd.DataFrame({
@@ -427,32 +430,32 @@ def display_analysis_results(author_id):
         'Estimated Cost': costs
     })
     st.dataframe(breakdown_df)
-    
+
     # Add footnote at the bottom
     st.markdown("<br>", unsafe_allow_html=True)  # Add some space
     st.markdown("""
         <div style='font-size: 0.8rem; color: #666; border-top: 1px solid #ddd; padding-top: 1rem;'>
-        Past 100 research articles with known publishers analysed using OpenAlex database 
-        (<a href="https://openalex.org/" target="_blank">https://openalex.org/</a>). 
-        Articles with unknown publishers, other publication types, and preprints are excluded. 
-        Costs obtained from OpenAlex - where not available estimated to be $1,500. 
-        This is a proof of concept prototype. 
+        Past 100 research articles with known publishers analysed using OpenAlex database
+        (<a href="https://openalex.org/" target="_blank">https://openalex.org/</a>).
+        Articles with unknown publishers, other publication types, and preprints are excluded.
+        Costs obtained from OpenAlex - where not available estimated to be $1,500.
+        This is a proof of concept prototype.
         Feedback (<a href="mailto:david.bann@ucl.ac.uk">david.bann@ucl.ac.uk</a>) is welcome.
         </div>
     """, unsafe_allow_html=True)
 
 def main():
     st.set_page_config(page_title="Publication Cost Tracker", layout="wide")
-    
+
     # Title in sidebar
     st.sidebar.title("Publication Cost Tracker")
-    
+
     with st.sidebar:
         st.header("Find Your Publications")
-        
+
         # Add tabs for different search methods
         search_tab, orcid_tab, id_tab = st.tabs(["Search by Name", "Use ORCID", "Use OpenAlex ID"])
-        
+
         with search_tab:
             author_query = st.text_input("Search by Name", placeholder="e.g., John Smith")
             if author_query:
@@ -467,7 +470,7 @@ def main():
                             st.session_state.analyze_clicked = True
                 else:
                     st.info("No authors found. Try refining your search.")
-        
+
         with orcid_tab:
             orcid = st.text_input("ORCID ID", placeholder="e.g., 0000-0002-1825-0097")
             if st.button("Search ORCID"):
@@ -478,7 +481,7 @@ def main():
                         st.session_state.analyze_clicked = True
                     else:
                         st.error("No author found with this ORCID ID")
-        
+
         with id_tab:
             openalex_id = st.text_input("OpenAlex Author ID", placeholder="e.g., A5008020290")
             if st.button("Analyze Using ID"):
@@ -486,7 +489,7 @@ def main():
                     clean_id = clean_author_id(openalex_id)
                     st.session_state.author_id = clean_id
                     st.session_state.analyze_clicked = True
-    
+
     # Main content area - Display analysis results
     if 'analyze_clicked' in st.session_state and 'author_id' in st.session_state:
         display_analysis_results(st.session_state.author_id)
