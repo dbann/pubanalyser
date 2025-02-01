@@ -1,279 +1,197 @@
-
-
-
 import streamlit as st
-import requests
 import pandas as pd
 from collections import Counter
 import matplotlib.pyplot as plt
+import pyalex
+from pyalex import Author, Authors, Work, Works, Publisher, Publishers
+from rich import print
+from itertools import chain
+from streamlit.logger import get_logger
+from constants import USER_EMAIL, FOR_PROFIT_PUBLISHERS, PREPRINT_SERVERS, ESTIMATED_APC, PUBLISHER_NAME_MAPPING, COMPANY_ABBREVIATIONS, MAX_NUM
 
-# Configuration
-FOR_PROFIT_PUBLISHERS = {
-    'elsevier', 'springer', 'springer nature', 'wiley', 'taylor & francis',
-    'sage publications', 'frontiers media sa', 'ieee', 'emerald', 'karger',
-    'thieme', 'wolters kluwer', 'acs publications', 'lippincott',
-    'lippincott williams & wilkins', 'wolters kluwer health',
-    'nature publishing group', 'nature portfolio', 'biomed central',
-    'biomedcentral', 'bmc', 'hindawi', 'mdpi', 'informa', 'f1000', 'relx',
-    'relx group', 'bentham science', 'inderscience', 'igi global', 'sciencedirect',
-    'de gruyter', 'sciendo', 'omics international', 'rsc publishing',
-}
+_LOGGER = get_logger(__name__)
 
-PREPRINT_SERVERS = {
-    'cold spring harbor laboratory',
-    'biorxiv',
-    'medrxiv',
-    'arxiv',
-    'ssrn'
-}
 
-ESTIMATED_APC = {
-    'elsevier': 3000,
-    'springer nature': 2800,
-    'wiley': 2500,
-    'taylor & francis': 2400,
-    'sage publications': 2000,
-    'frontiers media sa': 2950,
-    'ieee': 2000,
-    'emerald': 2800,
-    'karger': 2800,
-    'thieme': 2500,
-    'wolters kluwer': 2500,
-    'biomed central': 2000,
-    'plos': 1700,
-    'default': 1500
-}
+# setup pyalex
 
-def search_by_orcid(orcid):
-    """Search for author using ORCID ID via OpenAlex API."""
+pyalex.config.email = USER_EMAIL
+pyalex.config.max_retries = 5
+pyalex.config.retry_backoff_factor = 0.2
+pyalex.config.retry_http_codes = [429, 500, 503]
+
+
+
+
+
+def get_author_by_id(identifier:str) -> tuple[Author, str|None]:
+    """Get author details for an ORCID or OpenAlex author ID via OpenAlex API."""
     try:
-        base_url = "https://api.openalex.org/authors"
-        params = {
-            'filter': f"orcid:{orcid}",
-            'mailto': 'david.bann@ucl.ac.uk'
-        }
-
-        response = requests.get(base_url, params=params)
-        response.raise_for_status()
-        data = response.json()
-
-        if data.get('results') and len(data['results']) > 0:
-            author = data['results'][0]
-            return {
-                'id': author['id'].split('/')[-1],
-                'name': author.get('display_name', 'Unknown'),
-                'affiliation': author.get('last_known_institutions', [{}])[0].get('display_name', 'Unknown affiliation'),
-                'works_count': author.get('works_count', 0),
-                'orcid': orcid
-            }
-        return None
+        author:Author =  Authors()[identifier]
+        return author, clean_author_id(author.get('id',None))
     except Exception as e:
-        print(f"Error in search_by_orcid: {str(e)}")
-        return None
+        print(f"Error in get_author_by_id: {str(e)}")
+        return {}, None
 
-def search_authors(query):
+def search_authors(query: str) -> list[Author|None]:
     """Search for authors using OpenAlex API."""
     try:
-        base_url = "https://api.openalex.org/authors"
-        params = {
-            'search': query,
-            'per-page': 10,  # Limit to top 10 results
-            'mailto': 'david.bann@ucl.ac.uk'
-        }
-
-        response = requests.get(base_url, params=params)
-        response.raise_for_status()
-        data = response.json()
-
+        oa_query = Authors().search(query)
         authors = []
-        if 'results' in data:
-            for author in data['results']:
-                author_info = {
-                    'id': author['id'].split('/')[-1],
-                    'name': author.get('display_name', 'Unknown'),
-                    'affiliation': 'Unknown affiliation',
-                    'works_count': author.get('works_count', 0)
-                }
-
-                # Get latest affiliation
-                if author.get('last_known_institutions'):
-                    if len(author['last_known_institutions']) > 0:
-                        author_info['affiliation'] = author['last_known_institutions'][0].get('display_name', 'Unknown affiliation')
-
-                authors.append(author_info)
-
+        for record in chain(*oa_query.paginate(per_page=200)):
+            authors.append(record)
         return authors
     except Exception as e:
         print(f"Error in search_authors: {str(e)}")
         return []
 
-def clean_author_id(author_id):
+def clean_author_id(author_id: str) -> str|None:
     """Clean and format the author ID."""
-    if 'openalex.org' in author_id:
+    if not author_id or not isinstance(author_id, str):
+        return None
+    if '/' in author_id:
         author_id = author_id.split('/')[-1]
-    # Remove any existing 'A' or 'a' prefix and add uppercase 'A'
     author_id = author_id.lstrip('Aa')
     return f"A{author_id}"
 
-def fetch_author_details(author_id):
-    """Fetch author details including current affiliation from OpenAlex API."""
-    try:
-        url = f"https://api.openalex.org/authors/{author_id}"
-        params = {'mailto': 'david.bann@ucl.ac.uk'}
 
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
-    except:
-        return None
-
-def fetch_publications(author_id):
-    """Fetch publications data from OpenAlex API."""
-    with st.spinner('Fetching publication data (limited to last 100 articles)...'):
+def fetch_publications(author: Author) -> list[Work|None]:
+    """Fetch publications data for an author_id from OpenAlex API."""
+    with st.spinner('Fetching publication data...'):
         try:
-            base_url = "https://api.openalex.org/works"
-            params = {
-                'filter': f"author.id:{author_id},type:article",
-                'per-page': 100,
-                'sort': 'publication_date:desc',
-                'mailto': 'david.bann@ucl.ac.uk'
-            }
+            query = Works().filter(author={"id":author.get('id')})
+            results = []
+            for record in chain(*query.paginate(per_page=200)):
+                results.append(record)
+            return results
 
-            response = requests.get(base_url, params=params)
-            response.raise_for_status()
-            data = response.json()
+        except Exception as e:
+            print(f"Error in fetch_publications: {str(e)}")
+            return []
+def get_publishers_by_ids(publisher_ids: set[str]) -> list[Publisher|None]:
+    if len(publisher_ids) == 0:
+        return []
+    try:
+        return [Publishers()[publisher_id] for publisher_id in publisher_ids]
+    except Exception as e:
+        print(f"Error in determine_publisher_from_ids: {str(e)}")
+        return []
 
-            if 'results' in data and isinstance(data['results'], list):
-                return data
-            return {'results': []}
+def determine_main_publisher_from_source(source:dict) -> str:
+    """
+    Returns the cleaned/standardized publisher name for a source, in lower case.
+    """
+    def strip_company_abbreviations(name:str) -> str:
+        for abbr in COMPANY_ABBREVIATIONS:
+            if abbr in name:
+                name = name.replace(abbr,'').strip()
+            if abbr.rstrip() in name:
+                name = name.replace(abbr.rstrip(),'').strip()
+            if abbr.lstrip() in name:
+                name = name.replace(abbr.lstrip(),'').strip()
+        return name
 
-        except:
-            return {'results': []}
+    if not source:
+        return 'unknown'
 
-def get_publisher_info(work):
-    """Safely extract publisher information from a work."""
+    if str(source.get('host_organization')).startswith('https://openalex.org/I'):
+        return 'unknown'
+    found_names: list[str] = source.get('host_organization_lineage_names',[])
+    if not isinstance(found_names, list):
+        found_names = [found_names]
+    if not found_names:
+        return 'unknown'
+    final_name = 'unknown'
+    for name in found_names:
+        name = strip_company_abbreviations(name.lower())
+        for common_publisher_name in PUBLISHER_NAME_MAPPING:
+            if common_publisher_name in name:
+                final_name =  PUBLISHER_NAME_MAPPING[common_publisher_name]
+                return final_name if final_name else 'unknown'
+
+
+def get_publisher_for_work(work: Work) -> str:
+    """Retrieve a cleaned/standardized publisher name for a given work."""
     if work is None:
         return 'unknown'
-
-    try:
-        # Debug: Print the relevant fields to see what we're getting
-        print("\nDEBUG Publisher Info:")
-        print("Direct publisher:", work.get('publisher'))
-        print("Host org:", work.get('primary_location', {}).get('source', {}).get('host_organization_name'))
-        print("Display name:", work.get('primary_location', {}).get('source', {}).get('display_name'))
-        print("Source:", work.get('primary_location', {}).get('source', {}))
-
-        publisher = None
-
-        # Try multiple paths to get publisher info
-        if isinstance(work, dict):
-            # Try direct publisher field
-            if work.get('publisher'):
-                publisher = str(work['publisher']).lower()
-            # Try host organization name
-            elif work.get('primary_location', {}).get('source', {}).get('host_organization_name'):
-                publisher = str(work['primary_location']['source']['host_organization_name']).lower()
-            # Try display name from source
-            elif work.get('primary_location', {}).get('source', {}).get('display_name'):
-                publisher = str(work['primary_location']['source']['display_name']).lower()
-            # Try other locations if primary fails
-            elif work.get('locations'):
-                for location in work['locations']:
-                    if location.get('source', {}).get('host_organization_name'):
-                        publisher = str(location['source']['host_organization_name']).lower()
-                        break
-                    elif location.get('source', {}).get('display_name'):
-                        publisher = str(location['source']['display_name']).lower()
-                        break
-
-        if not publisher:
-            print("No publisher found in any field")
-            return 'unknown'
-
-        print(f"Found raw publisher: {publisher}")
-
-        # Clean up common variations
-        publisher = publisher.replace('ltd', '').replace('limited', '').strip()
-
-        # Extended publisher mapping
-        if any(p in publisher for p in ['elsevier', 'sciencedirect', 'cell press', 'relx group']):
-            return 'elsevier'
-        elif any(p in publisher for p in ['springer', 'nature portfolio', 'nature publishing']):
-            return 'springer nature'
-        elif any(p in publisher for p in ['wiley', 'blackwell']):
-            return 'wiley'
-        elif any(p in publisher for p in ['taylor & francis', 'taylor and francis', 'routledge']):
-            return 'taylor & francis'
-        elif any(p in publisher for p in ['wolters', 'lippincott']):
-            return 'wolters kluwer'
-        elif any(p in publisher for p in ['biomed central', 'bmc', 'biomedcentral']):
-            return 'biomed central'
-        elif 'sage' in publisher:
-            return 'sage publications'
-        elif 'frontiers' in publisher:
-            return 'frontiers media sa'
-        elif 'ieee' in publisher:
-            return 'ieee'
-        elif 'karger' in publisher:
-            return 'karger'
-        elif 'thieme' in publisher:
-            return 'thieme'
-        elif 'hindawi' in publisher:
-            return 'hindawi'
-        elif 'mdpi' in publisher:
-            return 'mdpi'
-        elif 'plos' in publisher or 'public library of science' in publisher:
-            return 'plos'
-        elif 'oxford university press' in publisher:
-            return 'oxford university press'
-        elif 'cambridge university press' in publisher:
-            return 'cambridge university press'
-
-        return publisher
-
-    except Exception as e:
-        print(f"Error in get_publisher_info: {str(e)}")
+    sources: list[dict] = []
+    for location in work.get('locations', []):
+        if isinstance(location, dict):
+            if location.get('source'):
+                try:
+                    sources.append(location.get('source', {}))
+                except Exception as e:
+                    print(f"Error in get_publisher_for_work: {str(e)}")
+                    print(f"Location: {location}")
+    if not sources:
         return 'unknown'
 
-def analyze_publishers(works):
+    publisher_names = set()
+    for source in sources:
+        publisher_names.add(determine_main_publisher_from_source(source))
+    publisher_names.discard('unknown')
+    publisher_names.discard('')
+    publisher_names.discard(None)
+    if len(publisher_names) > 1:
+        print(f"Multiple publishers found for work: {work.get('id')}")
+        print(f"Publishers: {publisher_names}")
+        print(f'Returning the first one: {list(publisher_names)[0]}')
+        return list(publisher_names)[0]
+    if len(publisher_names) == 1:
+        return list(publisher_names)[0]
+    else:
+        return 'unknown'
+
+
+def analyze_publishers(works: list[dict]):
     """Analyze publisher data from works."""
     publishers = []
     costs = []
-    titles = []  # Add this line
+    titles = []
+    is_oa = []
     total_cost = 0
     for_profit_count = 0
+    text = 'Analyzing newest publications...'
+    # sort works by publication_date and limit to max_num
+    works = sorted(works, key=lambda x: x.get('publication_date', '1900-01-01'), reverse=True)
+    if len(works) > MAX_NUM:
+        works = works[:MAX_NUM]
 
-    with st.spinner('Analyzing publications...'):
-        try:
-            # Get publisher info for each work and filter out None, unknown publishers, and preprints
-            publications = []
-            for work in works:
-                publisher = get_publisher_info(work)
-                if publisher is not None and publisher != 'unknown' and publisher not in PREPRINT_SERVERS:
-                    publications.append((work, publisher))
+    with st.spinner(text):
+        # Get publisher info for each work and filter out None, unknown publishers, and preprints
+        publications = []
+        for work in works:
+            no_apc = False
+            if not work.get('open_access',{}).get('is_oa',False):
+                no_apc = True
+            oa_color = work.get('open_access',{}).get('oa_status','')
+            if oa_color not in ['gold', 'hybrid', 'bronze', 'diamond']:
+                no_apc = True
 
-            for work, publisher in publications:
-                # Check for OpenAlex's estimated APC first
-                apc_cost = None
-                if work.get('apc_paid') and isinstance(work['apc_paid'], dict):
-                    apc_cost = work['apc_paid'].get('value')
+            publisher = get_publisher_for_work(work)
+            if publisher is not None and publisher != 'unknown' and publisher not in PREPRINT_SERVERS:
+                publications.append((work, publisher, no_apc))
 
-                # If no OpenAlex APC, use our estimates
-                if not apc_cost:
-                    apc_cost = ESTIMATED_APC.get(publisher, ESTIMATED_APC['default'])
+        for work, publisher, no_apc in publications:
+            # Check for OpenAlex's estimated APC first
+            apc_cost = 0
+            if work.get('apc_paid') and isinstance(work['apc_paid'], dict):
+                apc_cost = work['apc_paid'].get('value')
 
-                publishers.append(publisher)
-                costs.append(apc_cost)
-                titles.append(work.get('title', 'Unknown Title'))  # Add this line
-                total_cost += apc_cost
+            # If no OpenAlex APC, use our estimates
+            if not apc_cost and not no_apc:
+                apc_cost = ESTIMATED_APC.get(publisher, ESTIMATED_APC['default'])
 
-                if publisher in FOR_PROFIT_PUBLISHERS:
-                    for_profit_count += 1
+            publishers.append(publisher)
+            costs.append(apc_cost)
+            titles.append(work.get('title', 'Unknown Title'))
+            is_oa.append(True if (apc_cost > 0) or not no_apc else False)
+            total_cost += apc_cost
 
-        except Exception as e:
-            print(f"Error in analyze_publishers: {str(e)}")
+            if publisher in FOR_PROFIT_PUBLISHERS and apc_cost > 0:
+                for_profit_count += 1
 
-    return publishers, costs, total_cost, for_profit_count, titles  # Add titles to return
+
+    return publishers, costs, total_cost, for_profit_count, titles, is_oa
 
 def create_visualization(publishers_count, return_fig=True):
     """Create a bar chart of publisher distribution with for-profit publishers highlighted."""
@@ -306,11 +224,10 @@ def create_visualization(publishers_count, return_fig=True):
         plt.close()
         return 'publisher_distribution.png'
 
-def display_analysis_results(author_id):
+def display_analysis_results(author: Author):
     """Display the analysis results for a given author ID."""
     # Fetch author details first
-    author_details = fetch_author_details(author_id)
-    if not author_details:
+    if not author:
         st.error("Could not fetch author details.")
         return
 
@@ -323,11 +240,11 @@ def display_analysis_results(author_id):
     col1, col2 = st.columns(2)
     with col1:
         st.markdown(
-            f"<div style='font-size: 1.1rem;'><strong>Name:</strong> {author_details.get('display_name', 'Unknown')}</div>",
+            f"<div style='font-size: 1.1rem;'><strong>Name:</strong> {author.get('display_name', 'Unknown')}</div>",
             unsafe_allow_html=True
         )
     with col2:
-        institutions = author_details.get('last_known_institutions', [])
+        institutions = author.get('last_known_institutions', [])
         current_affiliation = institutions[0].get('display_name', 'Unknown affiliation') if institutions else 'Unknown affiliation'
         st.markdown(
             f"<div style='font-size: 1.1rem;'><strong>Current Affiliation:</strong> {current_affiliation}</div>",
@@ -337,14 +254,14 @@ def display_analysis_results(author_id):
     st.markdown("<hr style='margin: 0.5rem 0;'>", unsafe_allow_html=True)
 
     # Fetch publications
-    publications_data = fetch_publications(author_id)
+    publications_data = fetch_publications(author)
 
-    if not publications_data.get('results'):
+    if not publications_data:
         st.error("No publications found for this author.")
         return
 
     # Analyze publishers
-    publishers, costs, total_cost, for_profit_count, titles = analyze_publishers(publications_data['results'])
+    publishers, costs, total_cost, for_profit_count, titles, is_oa = analyze_publishers(publications_data)
     total_pubs = len(publishers)
     for_profit_percentage = (for_profit_count / total_pubs * 100) if total_pubs > 0 else 0
     publishers_count = Counter(publishers)
@@ -394,7 +311,7 @@ def display_analysis_results(author_id):
             csv_data = pd.DataFrame({
                 'Metric': ['Author', 'Affiliation'] + ['Total Publications', 'For-Profit Publications', 'For-Profit Percentage', 'Total Estimated Cost'],
                 'Value': [
-                    author_details.get('display_name', 'Unknown'),
+                    author.get('display_name', 'Unknown'),
                     current_affiliation,
                     str(total_pubs),
                     str(for_profit_count),
@@ -407,6 +324,7 @@ def display_analysis_results(author_id):
             detailed_df = pd.DataFrame({
                 'Title': titles,
                 'Publisher': publishers,
+                "is OA": is_oa,
                 'Estimated Cost': costs,
                 'For Profit': [p.lower() in FOR_PROFIT_PUBLISHERS for p in publishers]
             })
@@ -426,6 +344,7 @@ def display_analysis_results(author_id):
     st.markdown("<h4 style='margin-top: 1rem; margin-bottom: 0.5rem;'>Detailed Cost Breakdown</h4>", unsafe_allow_html=True)
     breakdown_df = pd.DataFrame({
         'Title': titles,
+        'Is OA?': is_oa,
         'Publisher': publishers,
         'Estimated Cost': costs
     })
@@ -445,54 +364,50 @@ def display_analysis_results(author_id):
     """, unsafe_allow_html=True)
 
 def main():
-    st.set_page_config(page_title="Publication Cost Tracker", layout="wide")
 
     # Title in sidebar
     st.sidebar.title("Publication Cost Tracker")
 
     with st.sidebar:
-        st.header("Find Your Publications")
+        st.header("Find Author Publications")
 
         # Add tabs for different search methods
-        search_tab, orcid_tab, id_tab = st.tabs(["Search by Name", "Use ORCID", "Use OpenAlex ID"])
+        search_tab,  id_tab = st.tabs(["Search by Name", "Search by (ORC)ID"])
 
         with search_tab:
             author_query = st.text_input("Search by Name", placeholder="e.g., John Smith")
             if author_query:
                 authors = search_authors(author_query)
                 if authors:
-                    st.write("Select your profile:")
+                    st.write("Select an author:")
                     for author in authors:
                         # Create a button for each author
-                        button_label = f"{author['name']}\n{author['affiliation']}\n({author['works_count']} works)"
-                        if st.button(button_label, key=author['id']):
-                            st.session_state.author_id = author['id']
+                        institute = "Unknown"
+                        last_instutions = author.get('last_known_institutions', None)
+                        if isinstance(last_instutions, list) and last_instutions:
+                            institute = last_instutions[0].get('display_name')
+                        button_label = f"{author.get('display_name')}\n{institute}\n({author.get('works_count')} works)"
+                        if st.button(button_label, key=clean_author_id(author.get('id'))):
+                            st.session_state.author_id = clean_author_id(author.get('id'))
+                            st.session_state.author_details = author
                             st.session_state.analyze_clicked = True
                 else:
-                    st.info("No authors found. Try refining your search.")
+                    st.error("No authors found.")
 
-        with orcid_tab:
-            orcid = st.text_input("ORCID ID", placeholder="e.g., 0000-0002-1825-0097")
-            if st.button("Search ORCID"):
-                if orcid:
-                    author_info = search_by_orcid(orcid)
-                    if author_info:
-                        st.session_state.author_id = author_info['id']
-                        st.session_state.analyze_clicked = True
-                    else:
-                        st.error("No author found with this ORCID ID")
 
         with id_tab:
-            openalex_id = st.text_input("OpenAlex Author ID", placeholder="e.g., A5008020290")
+            input_id = st.text_input("OpenAlex Author ID or ORCID", placeholder="e.g., A5008020290, https://openalex.org/authors/A5008020290, https://orcid.org/0000-0002-1825-0097, 0000-0002-1825-0097")
             if st.button("Analyze Using ID"):
-                if openalex_id:
-                    clean_id = clean_author_id(openalex_id)
-                    st.session_state.author_id = clean_id
+                author_info, author_id = get_author_by_id(input_id)
+                if author_id:
+                    st.session_state.author_details = author_info
                     st.session_state.analyze_clicked = True
+                else:
+                    st.error("Invalid author ID.")
 
     # Main content area - Display analysis results
     if 'analyze_clicked' in st.session_state and 'author_id' in st.session_state:
-        display_analysis_results(st.session_state.author_id)
+        display_analysis_results(st.session_state.author_details)
 
 if __name__ == "__main__":
     main()

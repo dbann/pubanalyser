@@ -1,5 +1,5 @@
 streamlit
-httpx
 pandas
 matplotlib
 pyalex
+rich
