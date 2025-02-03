@@ -1,4 +1,5 @@
 streamlit
-requests
 pandas
 matplotlib
+pyalex
+rich

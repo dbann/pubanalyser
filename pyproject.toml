@@ -1,0 +1,18 @@
+[project]
+name = "pubanalyser"
+version = "0.2.0"
+description = "A simple tool that estimates the cost of publishing - including the % of for profit publishers - for academic authors."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "streamlit",
+    "pandas",
+    "matplotlib",
+    "pyalex",
+    "rich",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "ruff",
+]
