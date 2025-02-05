@@ -7,7 +7,7 @@ Change these values to adapt the app to your needs.
 USER_EMAIL: str = 'david.bann@ucl.ac.uk'
 
 # max number of publications processed by the app during analysis
-MAX_NUM: int = 1000
+MAX_NUM: int = 2000
 
 FOR_PROFIT_PUBLISHERS: set = {
     'elsevier', 'springer', 'springer nature', 'wiley', 'taylor & francis',
